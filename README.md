@@ -1,5 +1,5 @@
 # MS-Celeb-1M-Cleaning
-Project to clean MS-Celeb-1M dataset
+Project to further clean MS-Celeb-1M dataset
 clean list from https://github.com/EB-Dodo/C-MS-Celeb is taken and cleaned ever further 
 Face embeddings are pre exracted using Keras implentation of Facenet from https://github.com/nyoki-mtl/keras-facenet . 
 These embeddings are then stored in a sql database and are used to train a model.
