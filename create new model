@@ -1,0 +1,155 @@
+import sqlite3
+import time
+import numpy as np
+import os
+import glob
+from random import randint
+
+import cv2
+import glob
+import tensorflow as tf
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.models import Sequential
+
+
+def get_group_ids(ident, conn):
+    command = "SELECT  face_embeddings,id from celeb where ident=\'" + ident + "\'"
+    cur = conn.cursor()
+    cur.execute(command)
+    rows = cur.fetchall()
+    # convert into 1d vectors
+    ids = []
+    for i in range(len(rows)):
+        ids += [rows[i][1]]
+    ids = np.ndarray.flatten(np.array(ids))
+    return ids
+
+
+def create_array(idents, conn):
+    array = []
+    for i in range(len(idents)):
+        temp = get_group_ids(idents[i], conn)
+        array += [temp]
+    return array
+
+
+def create_connection(db_file):
+    conn = None
+    try:
+        conn = sqlite3.connect(db_file)
+        return conn
+    except:
+        print("error connecting to database")
+    return conn
+
+
+def get_ident_index(conn):
+    command = """SELECT DISTINCT ident from celeb where ident!='unknown'"""
+    cur = conn.cursor()
+    cur.execute(command)
+    rows = cur.fetchall()
+    rows = np.ndarray.flatten(np.array(rows))
+    return rows
+
+
+def batch_read(vec_1_batch, vec_2_batch, conn):
+    command = ""
+    length=len(vec_1_batch)
+    for i in range(length):
+        temp_str = "select face_embeddings from celeb where id=" + str(vec_1_batch[i]) + " "
+        temp2_str = "union all "
+        temp3_str = "select face_embeddings from celeb where id=" + str(vec_2_batch[i]) + " "
+        if i != (len(vec_1_batch) - 1):
+            command =command + temp_str + temp2_str + temp3_str + "union all "
+        else:
+            command =command+ temp_str + temp2_str + temp3_str + ";"
+    cur = conn.cursor()
+    cur.execute(command)
+    rows = cur.fetchall()
+    rows = np.ndarray.flatten(np.array(rows))
+    batch_input = []
+    for j in range(len(vec_1_batch)):
+        temp = rows[j * 2]
+        temp2 = rows[(j * 2) + 1]
+        temp = np.frombuffer(temp, dtype=np.float32)
+        temp2 = np.frombuffer(temp2, dtype=np.float32)
+        temp3 = np.concatenate([temp, temp2])
+        batch_input += [temp3]
+    return batch_input
+
+
+def generator(batch_size=64):
+    connection = create_connection("G:/machine learning/Celeb1M.db")
+    print("fetching identities index")
+    ident_arr = create_array(get_ident_index(connection), connection)
+    print("done")
+    while True:
+        batch_input = []
+        batch_output = []
+        vec_1_batch = []
+        vec_2_batch = []
+        for i in range(batch_size):
+            rand_A_1 = randint(0, len(ident_arr) - 1)
+            rand_A_2 = randint(0, len(ident_arr[rand_A_1]) - 1)
+            vec_1 = ident_arr[rand_A_1][rand_A_2]
+            chance = randint(0, 100)
+            if chance < 50:
+                out = 1
+                rand_A_3 = randint(0, len(ident_arr[rand_A_1]) - 1)
+                vec_2 = ident_arr[rand_A_1][rand_A_3]
+            else:
+                out = 0
+                while True:
+                    rand_B_2 = randint(0, len(ident_arr) - 1)
+                    if rand_B_2 != rand_A_1:
+                        break
+                rand_B_3 = randint(0, len(ident_arr[rand_B_2]) - 1)
+                vec_2 = ident_arr[rand_B_2][rand_B_3]
+
+            vec_1_batch += [vec_1]
+            vec_2_batch += [vec_2]
+            batch_output += [out]
+        batch_input=batch_read(vec_1_batch,vec_2_batch,connection)
+        batch_input=np.array(batch_input)
+        batch_output=np.array(batch_output)
+        yield batch_input,batch_output
+
+connection = create_connection("G:/machine learning/Celeb1M.db")
+#identities = get_ident_index(connection)
+
+command="""select count(*)  from celeb where ident!='unknown'"""
+cur = connection.cursor()
+cur.execute(command)
+data_size = cur.fetchall()[0][0]
+print("data size is ",str(data_size))
+connection.close()
+
+model_layers = [
+    Dense(256, input_dim=(256)),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.LeakyReLU(alpha=0.3),
+    Dense(128),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.LeakyReLU(alpha=0.3),
+    tf.keras.layers.Dropout(.5),
+    Dense(128),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.LeakyReLU(alpha=0.3),
+    Dense(128),
+    tf.keras.layers.BatchNormalization(),
+    tf.keras.layers.LeakyReLU(alpha=0.3),
+    Dense(1, activation='sigmoid')
+]
+model = Sequential(model_layers)
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(lr=0.0001),
+    loss="binary_crossentropy",
+    metrics=['accuracy']
+ )
+
+batch_size = 128
+steps = int(data_size / batch_size)
+
+datagen = generator(batch_size=batch_size)
+model.fit_generator(datagen, steps_per_epoch=steps, epochs=3, verbose=1)
+model.save("faces4.h5")
